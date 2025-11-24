@@ -29,9 +29,11 @@ class Evaluator:
     def compute_metrics(self) -> Dict[str, float]:
         if self.type == EvaluatorType.downstream:
             assert isinstance(self.eval_metric, ICLMetric)
-            return {
-                f"eval/downstream/{self.label}_{self.eval_metric.metric_type}": self.eval_metric.compute().item(),
-            }
+            value = self.eval_metric.compute().item()
+            key = f"eval/downstream/{self.label}_{self.eval_metric.metric_type}"
+            if self.eval_metric.metric_type in ["ce_loss", "bpb"]:
+                key = key.replace("/downstream/", f"/downstream_{self.eval_metric.metric_type}/")
+            return {key: value}
         elif self.type == EvaluatorType.lm:
             # Metric(s) = cross entropy loss
             metrics: Dict[str, Metric]

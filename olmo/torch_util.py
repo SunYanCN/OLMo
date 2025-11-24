@@ -44,7 +44,10 @@ def get_local_world_size() -> int:
 
 
 def get_global_rank() -> int:
-    return int(os.environ.get("RANK") or dist.get_rank())
+    if is_distributed():
+        return int(os.environ.get("RANK") or dist.get_rank())
+    else:
+        return 0
 
 
 def get_local_rank() -> int:
@@ -56,7 +59,10 @@ def get_fs_local_rank() -> int:
     if all ranks share the same filesystem then `get_fs_local_rank()` will be equivalent to `get_global_rank()`,
     but if nodes do not share the same filesystem then `get_fs_local_rank()` will be equivalent to `get_local_rank()`.
     """
-    return int(os.environ.get("FS_LOCAL_RANK") or get_local_rank())
+    if os.environ.get("OLMO_SHARED_FS"):
+        return int(os.environ.get("FS_LOCAL_RANK") or get_global_rank())
+    else:
+        return int(os.environ.get("FS_LOCAL_RANK") or get_local_rank())
 
 
 def move_to_device(o: T, device: torch.device) -> T:
@@ -69,7 +75,7 @@ def move_to_device(o: T, device: torch.device) -> T:
     elif isinstance(o, tuple):
         return tuple((move_to_device(x, device) for x in o))  # type: ignore[return-value]
     else:
-        return o
+        return o  # type: ignore
 
 
 def ensure_finite_(x: torch.Tensor, check_neg_inf: bool = True, check_pos_inf: bool = False):
@@ -86,6 +92,8 @@ def ensure_finite_(x: torch.Tensor, check_neg_inf: bool = True, check_pos_inf: b
 def get_default_device() -> torch.device:
     if torch.cuda.is_available() and torch.cuda.is_initialized():
         return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
     else:
         return torch.device("cpu")
 
@@ -137,3 +145,27 @@ def gc_cuda():
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def get_cumulative_document_lengths(doc_lens: torch.Tensor) -> torch.Tensor:
+    """
+    Transform a batched tensor of document lengths into a 1D tensor of cumulative document
+    lengths for the whole batch.
+    """
+    return torch.cat(
+        [
+            torch.tensor([0], dtype=torch.int32, device=doc_lens.device),
+            torch.cumsum(doc_lens.masked_select(doc_lens != 0), 0, dtype=torch.int32),
+        ]
+    )
+
+
+class SingleAccelerator(torch.nn.Module):
+    process_group = None
+
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, *args, **kwargs):
+        return self.module(*args, **kwargs)
